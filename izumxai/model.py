@@ -4,10 +4,11 @@
 pre-norm residual, tied embeddings. Всё написано здесь, без готовых
 блоков из transformers — модель целиком наша.
 
-Пресеты (params считаются в `Config.n_params()`):
-    nano-30m  ~33M   d=384  L=6   H=6   KV=2
-    nano-100m ~104M  d=640  L=12  H=10  KV=2
-    nano-250m ~250M  d=896  L=16  H=14  KV=2
+Пресеты (params считаются в `Config.n_params()`, vocab 8192):
+    nano-12m  ~12.6M  d=384  L=6   H=6   KV=2  ff=1024
+    nano-30m  ~27M    d=512  L=8   H=8   KV=2  ff=1408
+    nano-100m ~104M   d=896  L=12  H=14  KV=2  ff=2304
+    nano-250m ~270M   d=1024 L=24  H=16  KV=2  ff=2816
 """
 
 from __future__ import annotations
@@ -22,9 +23,10 @@ import torch.nn.functional as F
 
 # --------------------------------------------------------------------- конфиг
 PRESETS: dict[str, dict] = {
-    "nano-30m": dict(d_model=384, n_layers=6, n_heads=6, n_kv_heads=2, d_ff=1024, max_seq=512),
-    "nano-100m": dict(d_model=640, n_layers=12, n_heads=10, n_kv_heads=2, d_ff=1792, max_seq=1024),
-    "nano-250m": dict(d_model=896, n_layers=16, n_heads=14, n_kv_heads=2, d_ff=2432, max_seq=1024),
+    "nano-12m": dict(d_model=384, n_layers=6, n_heads=6, n_kv_heads=2, d_ff=1024, max_seq=512),
+    "nano-30m": dict(d_model=512, n_layers=8, n_heads=8, n_kv_heads=2, d_ff=1408, max_seq=1024),
+    "nano-100m": dict(d_model=896, n_layers=12, n_heads=14, n_kv_heads=2, d_ff=2304, max_seq=1024),
+    "nano-250m": dict(d_model=1024, n_layers=24, n_heads=16, n_kv_heads=2, d_ff=2816, max_seq=1024),
 }
 
 
@@ -93,8 +95,9 @@ class Rotary(nn.Module):
         inv = 1.0 / (theta ** (torch.arange(0, head_dim, 2).float() / head_dim))
         t = torch.arange(max_seq).float()
         freqs = torch.outer(t, inv)
-        self.register_buffer("cos", torch.cos(freqs), persistent=False)
-        self.register_buffer("sin", torch.sin(freqs), persistent=False)
+        emb = torch.cat([freqs, freqs], dim=-1)  # [max_seq, head_dim]
+        self.register_buffer("cos", torch.cos(emb), persistent=False)
+        self.register_buffer("sin", torch.sin(emb), persistent=False)
 
     def forward(self, q: torch.Tensor, k: torch.Tensor, offset: int = 0):
         # q,k: [B, H, T, D]

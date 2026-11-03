@@ -27,8 +27,8 @@ import requests
 OLLAMA = "http://localhost:11434"
 
 SYSTEM_RU = (
-    "Ты — IzumxAI, точный и краткий ассистент. Решай задачу по шагам, "
-    "без воды и без повторения условия. В конце обязательно строка «Ответ: <значение>»."
+    "Ты — IzumxAI, точный и краткий ассистент. Решай задачу в 2–3 коротких шага, "
+    "без LaTeX, без $$, без повторения условия. Последняя строка обязательно: «Ответ: <значение>»."
 )
 
 # --------------------------------------------------------------- математика
@@ -217,13 +217,14 @@ SEED_TEXTS = [
 
 # ------------------------------------------------------------------ учитель
 def ask(session: requests.Session, model: str, messages: list[dict],
-        temperature: float = 0.6, num_ctx: int = 4096, think: bool = False) -> str:
+        temperature: float = 0.6, num_ctx: int = 4096, think: bool = False,
+        num_predict: int = 1024, timeout: int = 600) -> str:
     payload = {
         "model": model, "messages": messages, "stream": False,
         "think": think,
-        "options": {"temperature": temperature, "num_ctx": num_ctx, "num_predict": 1024},
+        "options": {"temperature": temperature, "num_ctx": num_ctx, "num_predict": num_predict},
     }
-    r = session.post(f"{OLLAMA}/api/chat", json=payload, timeout=600)
+    r = session.post(f"{OLLAMA}/api/chat", json=payload, timeout=timeout)
     r.raise_for_status()
     return r.json()["message"]["content"].strip()
 
@@ -249,7 +250,9 @@ def main() -> None:
                     help="доли задач в процентах")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--think", action="store_true", help="включить reasoning учителя")
-    ap.add_argument("--timeout", type=int, default=600)
+    ap.add_argument("--num-ctx", type=int, default=2048)
+    ap.add_argument("--num-predict", type=int, default=512)
+    ap.add_argument("--timeout", type=int, default=900)
     args = ap.parse_args()
 
     out = Path(args.out)
@@ -266,6 +269,12 @@ def main() -> None:
 
     rng = random.Random(args.seed)
     session = requests.Session()
+
+    def teacher(messages: list[dict]) -> str:
+        return ask(session, args.model, messages, think=args.think,
+                   num_ctx=args.num_ctx, num_predict=args.num_predict,
+                   timeout=args.timeout)
+
     t0 = time.time()
     kept = done
     attempts = 0
@@ -278,18 +287,18 @@ def main() -> None:
             try:
                 if kind == "math":
                     problem, expected = gen_arithmetic(rng)
-                    answer = ask(session, args.model, [
+                    answer = teacher([
                         {"role": "system", "content": SYSTEM_RU},
-                        {"role": "user", "content": problem}], think=args.think)
+                        {"role": "user", "content": problem}])
                     ok = check_math(answer, expected)
                     if not ok:
                         fail["wrong"] += 1
                         continue
                 elif kind == "logic":
                     problem, expected = gen_logic(rng)
-                    answer = ask(session, args.model, [
+                    answer = teacher([
                         {"role": "system", "content": SYSTEM_RU},
-                        {"role": "user", "content": problem}], think=args.think)
+                        {"role": "user", "content": problem}])
                     if not check_math(answer, expected):
                         fail["wrong"] += 1
                         continue
@@ -297,7 +306,7 @@ def main() -> None:
                     func, ref, desc, cases_fn = rng.choice(CODE_TASKS)
                     cases = cases_fn(rng)
                     problem = desc
-                    answer = ask(session, args.model, [
+                    answer = teacher([
                         {"role": "system", "content": "Ты пишешь только рабочий код Python в одном блоке ```python. Без лишних объяснений."},
                         {"role": "user", "content": desc}])
                     src = extract_code(answer)
@@ -311,7 +320,7 @@ def main() -> None:
                     tpl, validator = rng.choice(INSTRUCTION_TASKS)
                     text = rng.choice(SEED_TEXTS)
                     problem = tpl.format(text=text)
-                    answer = ask(session, args.model, [
+                    answer = teacher([
                         {"role": "system", "content": SYSTEM_RU},
                         {"role": "user", "content": problem}])
                     if not validator(answer):

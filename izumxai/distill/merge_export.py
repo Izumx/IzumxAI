@@ -14,7 +14,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-MODELFILE = """FROM {gguf}
+MODELFILE = """FROM "{gguf}"
 
 TEMPLATE \"\"\"{{{{ if .System }}}}<|im_start|>system
 {{{{ .System }}}}<|im_end|>
@@ -62,7 +62,9 @@ def merge(adapter: str, out_dir: Path, base: str) -> Path:
 
 
 def to_gguf(model_dir: Path, gguf_dir: Path, quant: str | None) -> Path:
-    script = Path("tools/llama.cpp/convert_hf_to_gguf.py")
+    script = Path("tools/llama_src/convert_hf_to_gguf.py")
+    if not script.exists():
+        script = Path("tools/llama.cpp/convert_hf_to_gguf.py")
     if not script.exists():
         fetch_convert_script(script)
     out = gguf_dir / "izumxai-2b-f16.gguf"
@@ -73,13 +75,15 @@ def to_gguf(model_dir: Path, gguf_dir: Path, quant: str | None) -> Path:
 
     if not quant:
         return out
-    exe = shutil.which("llama-quantize") or shutil.which("llama-quantize.exe")
+    exe = (shutil.which("llama-quantize")
+           or next(iter(Path("tools/llama_bin").glob("llama-quantize.exe")), None))
     if not exe:
-        print("llama-quantize не найден в PATH — оставляю f16 "
-              "(Ollama сам квантует при `ollama create` по PARAMETER quantize)")
+        print("llama-quantize не найден — оставляю f16 "
+              "(скачать: https://github.com/ggml-org/llama.cpp/releases, "
+              "llama-bXXXXX-bin-win-cpu-x64.zip -> tools/llama_bin)")
         return out
     q = gguf_dir / f"izumxai-2b-{quant}.gguf"
-    subprocess.run([exe, str(out), str(q), quant], check=True)
+    subprocess.run([str(exe), str(out), str(q), quant], check=True)
     return q
 
 
@@ -89,12 +93,18 @@ def main() -> None:
     ap.add_argument("--base", default="Qwen/Qwen3-1.7B")
     ap.add_argument("--out", default="models/izumxai-2b")
     ap.add_argument("--gguf", action="store_true")
-    ap.add_argument("--quant", default="", help="Q8_0 / Q4_K_M / ...")
+    ap.add_argument("--quant", default="Q4_K_M", help="Q8_0 / Q4_K_M / ... (пусто = без квантования)")
     ap.add_argument("--name", default="izumxai:2b")
     args = ap.parse_args()
 
     merged = merge(args.adapter, Path(args.out), args.base)
+
     if not args.gguf:
+        # Ollama умеет импортировать safetensors напрямую (без конвертации)
+        modelfile = Path(args.out) / "Modelfile"
+        modelfile.write_text(MODELFILE.format(gguf=merged.resolve()), encoding="utf-8")
+        print(f"Modelfile (safetensors): {modelfile}")
+        print(f"\nдальше:\n  ollama create {args.name} -f \"{modelfile}\"\n  ollama run {args.name}")
         return
 
     gguf = to_gguf(merged, Path(args.out) / "gguf", args.quant or None)

@@ -73,48 +73,84 @@ class BPETokenizer:
             vocab[idx] = tok.encode("utf-8")
         self._decoder: dict[int, bytes] = vocab
         self._ranks = {pair: i for i, pair in enumerate(self.merges)}
+        self._cache: dict[str, tuple[int, ...]] = {}
 
     # ---------------------------------------------------------------- обучение
     @classmethod
     def train(cls, texts: list[str], vocab_size: int = 8192,
               specials: tuple[str, ...] = ("<|pad|>", "<|bos|>", "<|eos|>", "<|user|>", "<|assistant|>"),
               min_freq: int = 2) -> "BPETokenizer":
+        """Инкрементальный BPE: обновляем только слова, затронутые merge.
+
+        Наивный вариант (пересчёт всех пар после каждого merge) на корпусе
+        в несколько МБ работает часами; этот — секунды-минуты.
+        """
+        import heapq
+        from collections import defaultdict
+
         word_freq: Counter[tuple[int, ...]] = Counter()
         for text in texts:
             for chunk in _split(text):
                 word_freq[tuple(chunk.encode("utf-8"))] += 1
+
+        words: list[list[int]] = [list(w) for w in word_freq]
+        freqs: list[int] = list(word_freq.values())
+        del word_freq
+
+        pair_counts: Counter[tuple[int, int]] = Counter()
+        pair_where: dict[tuple[int, int], set[int]] = defaultdict(set)
+        for idx, w in enumerate(words):
+            f = freqs[idx]
+            for p in zip(w, w[1:]):
+                pair_counts[p] += f
+                pair_where[p].add(idx)
+
+        heap = [(-c, p) for p, c in pair_counts.items()]
+        heapq.heapify(heap)
 
         merges: dict[tuple[int, int], int] = {}
         next_id = 256
         target = vocab_size - len(specials)
 
         while next_id < target:
-            pairs: Counter[tuple[int, int]] = Counter()
-            for word, freq in word_freq.items():
-                for a, b in zip(word, word[1:]):
-                    pairs[(a, b)] += freq
-            if not pairs:
-                break
-            (best, best_freq), = pairs.most_common(1)
-            if best_freq < min_freq:
+            best = None
+            while heap:
+                neg, pair = heapq.heappop(heap)
+                if pair_counts.get(pair) == -neg:
+                    best = pair
+                    break
+            if best is None or pair_counts[best] < min_freq:
                 break
 
             merges[best] = next_id
             next_id += 1
 
-            new_words: Counter[tuple[int, ...]] = Counter()
-            for word, freq in word_freq.items():
-                out: list[int] = []
+            for idx in list(pair_where[best]):
+                w, f = words[idx], freqs[idx]
+                for p in zip(w, w[1:]):
+                    pair_counts[p] -= f
+                    pair_where[p].discard(idx)
+                    if pair_counts[p] <= 0:
+                        pair_counts.pop(p, None)
+
+                new: list[int] = []
                 i = 0
-                while i < len(word):
-                    if i + 1 < len(word) and (word[i], word[i + 1]) == best:
-                        out.append(merges[best])
+                while i < len(w):
+                    if i + 1 < len(w) and (w[i], w[i + 1]) == best:
+                        new.append(merges[best])
                         i += 2
                     else:
-                        out.append(word[i])
+                        new.append(w[i])
                         i += 1
-                new_words[tuple(out)] += freq
-            word_freq = new_words
+                words[idx] = new
+
+                for p in set(zip(new, new[1:])):
+                    pair_counts[p] += f
+                    pair_where[p].add(idx)
+                    heapq.heappush(heap, (-pair_counts[p], p))
+
+            pair_where.pop(best, None)
+            pair_counts.pop(best, None)
 
         special_ids = {tok: next_id + i for i, tok in enumerate(specials)}
         return cls(merges, special_ids)
@@ -139,7 +175,12 @@ class BPETokenizer:
     def encode(self, text: str, add_bos: bool = False, add_eos: bool = False) -> list[int]:
         out: list[int] = [self.specials["<|bos|>"]] if add_bos else []
         for chunk in _split(text):
-            out.extend(self._apply(list(chunk.encode("utf-8"))))
+            cached = self._cache.get(chunk)
+            if cached is None:
+                cached = tuple(self._apply(list(chunk.encode("utf-8"))))
+                if len(self._cache) < 300_000:
+                    self._cache[chunk] = cached
+            out.extend(cached)
         if add_eos:
             out.append(self.specials["<|eos|>"])
         return out
