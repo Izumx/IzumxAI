@@ -1,0 +1,13 @@
+# Ядро (torch ставится отдельно под свою CUDA — см. README)
+numpy>=1.26
+requests>=2.31
+tqdm>=4.66
+
+# Дистилляция / 2B
+transformers>=4.51
+accelerate>=1.0
+peft>=0.14
+bitsandbytes>=0.45
+safetensors>=0.4
+datasets>=3.0
+gguf>=0.10

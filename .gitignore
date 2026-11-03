@@ -1,0 +1,14 @@
+.venv/
+.cache/
+__pycache__/
+*.pyc
+runs/
+models/
+tools/
+data/raw/
+data/bin/
+data/tokenizer/
+data/distill/
+*.pt
+*.gguf
+.ipynb_checkpoints/
