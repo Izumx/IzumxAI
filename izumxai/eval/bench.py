@@ -1,9 +1,10 @@
 """Бенчмарк: IzumxAI:2B против qwen3:8b на одинаковых задачах.
 
-Проверяет то, что заявлено: математика, код (реальный запуск тестов),
-русские инструкции + скорость генерации.
+Задачи берутся из общего банка (`izumxai.distill.tasks`), ответы проверяются
+программно: математика/логика — точное число, код — реальный запуск тестов,
+инструкции — строгий формат. Поэтому счёт не зависит от «впечатления».
 
-python -m izumxai.eval.bench --models izumxai:2b,qwen3:8b --n-math 40 --n-code 20
+    python -m izumxai.eval.bench --models izumxai:2b,qwen3:8b --level hard
 """
 
 from __future__ import annotations
@@ -11,119 +12,124 @@ from __future__ import annotations
 import argparse
 import json
 import random
-import re
-import subprocess
-import sys
-import tempfile
 import time
 from pathlib import Path
 
 import requests
 
-from ..distill.gen_data import (
-    CODE_TASKS, INSTRUCTION_TASKS, SEED_TEXTS, SYSTEM_RU, check_math, extract_code,
-    gen_arithmetic, run_tests,
-)
+from ..distill.tasks import gen_task
 
 OLLAMA = "http://localhost:11434"
 
 
 def chat(model: str, system: str, user: str, temperature: float = 0.2,
-         num_ctx: int = 4096) -> tuple[str, float, int]:
+         num_ctx: int = 4096, num_predict: int = 800) -> tuple[str, float, int]:
     payload = {
         "model": model,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         "stream": False,
         "think": False,
-        "options": {"temperature": temperature, "num_ctx": num_ctx, "num_predict": 800},
+        "options": {"temperature": temperature, "num_ctx": num_ctx, "num_predict": num_predict},
     }
     t0 = time.time()
     r = requests.post(f"{OLLAMA}/api/chat", json=payload, timeout=900)
     r.raise_for_status()
     data = r.json()
     dt = time.time() - t0
-    out_tokens = data.get("eval_count", 0)
-    return data["message"]["content"].strip(), dt, out_tokens
+    return data["message"]["content"].strip(), dt, data.get("eval_count", 0)
+
+
+def build_tasks(args, rng: random.Random):
+    """Наборы задач с уникальными условиями (без повторов между типами)."""
+    plan = [
+        ("math", args.n_math),
+        ("logic", args.n_logic),
+        ("code", args.n_code),
+        ("instruction", args.n_instr),
+    ]
+    levels = ["easy", "hard"] if args.level == "mix" else [args.level]
+    seen: set[str] = set()
+    out = {}
+    for kind, n in plan:
+        items = []
+        guard = 0
+        while len(items) < n and guard < n * 40:
+            guard += 1
+            level = levels[len(items) % len(levels)]
+            t = gen_task(rng, kind, level)
+            if t.problem in seen:
+                continue
+            seen.add(t.problem)
+            items.append((level, t))
+        out[kind] = items
+    return out
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--models", default="izumxai:2b,qwen3:8b")
-    ap.add_argument("--n-math", type=int, default=30)
-    ap.add_argument("--n-code", type=int, default=12)
-    ap.add_argument("--n-instr", type=int, default=10)
+    ap.add_argument("--n-math", type=int, default=24)
+    ap.add_argument("--n-logic", type=int, default=12)
+    ap.add_argument("--n-code", type=int, default=16)
+    ap.add_argument("--n-instr", type=int, default=12)
+    ap.add_argument("--level", default="hard", choices=["easy", "hard", "mix"])
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--out", default="runs/bench.json")
     args = ap.parse_args()
 
     rng = random.Random(args.seed)
-    math_tasks = [gen_arithmetic(rng) for _ in range(args.n_math)]
-    code_tasks = []
-    for i in range(args.n_code):
-        func, ref, desc, cases_fn = CODE_TASKS[i % len(CODE_TASKS)]
-        code_tasks.append((func, desc, cases_fn(rng)))
-    instr_tasks = []
-    for i in range(args.n_instr):
-        tpl, validator = INSTRUCTION_TASKS[i % len(INSTRUCTION_TASKS)]
-        instr_tasks.append((tpl.format(text=SEED_TEXTS[i % len(SEED_TEXTS)]), validator))
+    bank = build_tasks(args, rng)
+    total = sum(len(v) for v in bank.values())
+    print(f"задач: {total} (уровень: {args.level})")
 
     results: dict[str, dict] = {}
     for model in [m.strip() for m in args.models.split(",") if m.strip()]:
         print(f"\n=== {model} ===")
-        res = {"math": 0, "code": 0, "instr": 0, "speed": [], "errors": 0}
+        res: dict = {"by_kind": {}, "rows": [], "errors": 0}
+        for kind, items in bank.items():
+            ok_n = 0
+            for i, (level, t) in enumerate(items, 1):
+                try:
+                    ans, dt, ntok = chat(model, t.system, t.problem)
+                except Exception as e:
+                    res["errors"] += 1
+                    print(f"  {kind} {i}: ошибка {e}")
+                    continue
+                ok = bool(t.check(ans))
+                ok_n += int(ok)
+                res["rows"].append({
+                    "kind": kind, "level": level, "problem": t.problem,
+                    "expected": t.expected, "answer": ans, "ok": ok,
+                    "sec": round(dt, 2), "tokens": ntok,
+                })
+                print(f"  {kind} {i}/{len(items)} [{level}]: {'OK' if ok else 'fail'}"
+                      f" (ждём {t.expected})", flush=True)
+            acc = ok_n / max(1, len(items))
+            res["by_kind"][kind] = {"acc": acc, "n": len(items), "ok": ok_n}
+            print(f"  -> {kind}: {acc:.0%}")
 
-        for i, (problem, expected) in enumerate(math_tasks, 1):
-            try:
-                ans, dt, ntok = chat(model, SYSTEM_RU, problem)
-            except Exception as e:
-                res["errors"] += 1
-                print(f"  math {i}: ошибка {e}")
-                continue
-            ok = check_math(ans, expected)
-            res["math"] += int(ok)
-            res["speed"].append(ntok / dt if dt else 0)
-            print(f"  math {i}/{len(math_tasks)}: {'OK' if ok else 'fail'} "
-                  f"(ждём {expected})", flush=True)
-
-        for i, (func, desc, cases) in enumerate(code_tasks, 1):
-            try:
-                ans, dt, ntok = chat(model,
-                                     "Ты пишешь только рабочий код Python в блоке ```python.",
-                                     desc)
-            except Exception as e:
-                res["errors"] += 1
-                print(f"  code {i}: ошибка {e}")
-                continue
-            src = extract_code(ans)
-            ok = bool(src) and run_tests(src, func, cases)
-            res["code"] += int(ok)
-            res["speed"].append(ntok / dt if dt else 0)
-            print(f"  code {i}/{len(code_tasks)}: {'OK' if ok else 'fail'}", flush=True)
-
-        for i, (problem, validator) in enumerate(instr_tasks, 1):
-            try:
-                ans, dt, ntok = chat(model, SYSTEM_RU, problem)
-            except Exception as e:
-                res["errors"] += 1
-                print(f"  instr {i}: ошибка {e}")
-                continue
-            ok = validator(ans)
-            res["instr"] += int(ok)
-            res["speed"].append(ntok / dt if dt else 0)
-            print(f"  instr {i}/{len(instr_tasks)}: {'OK' if ok else 'fail'}", flush=True)
-
-        res["math_acc"] = res["math"] / max(1, len(math_tasks))
-        res["code_acc"] = res["code"] / max(1, len(code_tasks))
-        res["instr_acc"] = res["instr"] / max(1, len(instr_tasks))
-        res["tok_per_s"] = sum(res["speed"]) / max(1, len(res["speed"]))
+        good = [r for r in res["rows"] if r["tokens"] and r["sec"]]
+        res["acc"] = sum(r["ok"] for r in good) / max(1, len(good))
+        res["tok_per_s"] = (sum(r["tokens"] for r in good)
+                            / max(1e-9, sum(r["sec"] for r in good)))
         results[model] = res
-        print(f"  итог: math {res['math_acc']:.0%}, code {res['code_acc']:.0%}, "
-              f"instr {res['instr_acc']:.0%}, {res['tok_per_s']:.1f} tok/s")
+        print(f"  итог: {res['acc']:.0%}, {res['tok_per_s']:.1f} tok/s")
 
-    print("\n{:<20} {:>8} {:>8} {:>8} {:>10}".format("модель", "math", "code", "instr", "tok/s"))
-    for model, r in results.items():
-        print("{:<20} {:>7.0%} {:>8.0%} {:>8.0%} {:>10.1f}".format(
-            model, r["math_acc"], r["code_acc"], r["instr_acc"], r["tok_per_s"]))
+    print("\n{:<18}".format("тип") + "".join(f"{m[:16]:>18}" for m in results))
+    for kind in bank:
+        line = "{:<18}".format(kind)
+        for r in results.values():
+            k = r["by_kind"].get(kind, {"ok": 0, "n": 1})
+            line += f"{k['ok']}/{k['n']:<16}".rjust(18)
+        print(line)
+    line = "{:<18}".format("итого")
+    for r in results.values():
+        line += f"{r['acc']:.0%}".rjust(18)
+    print(line)
+    line = "{:<18}".format("tok/s")
+    for r in results.values():
+        line += f"{r['tok_per_s']:.1f}".rjust(18)
+    print(line)
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
