@@ -24,5 +24,22 @@ class AlgorithmTasks(unittest.TestCase):
                     self.assertFalse(run_tests(buggy_source, name, cases))
 
 
+class ThinkDataChecks(unittest.TestCase):
+    def test_mbpp_reference_passes_and_stub_fails(self):
+        import json
+        from pathlib import Path
+        from izumxai.distill.gen_plan import mbpp_task
+
+        source = Path("runs/mbpp-train-source.jsonl")
+        if not source.exists():
+            self.skipTest("MBPP source snapshot is not present")
+        row = next(json.loads(line) for line in
+                   source.read_text(encoding="utf-8").splitlines() if line.strip())
+        _, check = mbpp_task(row)
+        reference = "```python\n" + row["test_setup_code"] + "\n" + row["code"] + "\n```"
+        self.assertTrue(check(reference))
+        self.assertFalse(check("```python\ndef nope(*args, **kwargs):\n    return None\n```"))
+
+
 if __name__ == "__main__":
     unittest.main()

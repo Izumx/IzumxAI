@@ -69,9 +69,15 @@ def build_labeled_example(tokenizer, messages: list[dict], max_len: int):
         return None
 
     prompt_text = tokenizer.apply_chat_template(
-        msgs[:-1], tokenize=False, add_generation_prompt=True, enable_thinking=False
+        msgs[:-1], tokenize=False, add_generation_prompt=True,
+        # Ответ с собственной цепочкой рассуждений не должен получать пустой
+        # <think></think> от шаблона: иначе модель учится «думать ни о чём».
+        enable_thinking=msgs[-1].get("content", "").lstrip().startswith("<think>"),
     )
-    full_text = tokenizer.apply_chat_template(msgs, tokenize=False, enable_thinking=False)
+    full_text = tokenizer.apply_chat_template(
+        msgs, tokenize=False,
+        enable_thinking=msgs[-1].get("content", "").lstrip().startswith("<think>"),
+    )
 
     prompt_ids = tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
     full_ids = tokenizer(full_text, add_special_tokens=False)["input_ids"]

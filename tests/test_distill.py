@@ -37,6 +37,15 @@ class TrainingExamples(unittest.TestCase):
         ], 32)
         self.assertIsNone(ex)
 
+    def test_reasoning_answer_keeps_its_thinking_trace(self):
+        ex = build_labeled_example(self.tok, [
+            {"role": "user", "content": "2+2?"},
+            {"role": "assistant", "content": "<think>\nсчитаю\n</think>\n\n4"},
+        ], 256)
+        answer = self.tok.decode([x for x in ex["labels"] if x != -100])
+        self.assertTrue(answer.startswith("<think>\nсчитаю\n</think>"))
+        self.assertTrue(answer.endswith("4<|im_end|>\n"))
+
 
 class PreferenceGradients(unittest.TestCase):
     def test_near_certain_responses_have_finite_gradients(self):
@@ -176,6 +185,50 @@ class BenchmarkAccuracy(unittest.TestCase):
             result = json.loads(out.read_text(encoding="utf-8"))["fixture"]
             self.assertAlmostEqual(result["acc"], 2 / 3)
             self.assertEqual(len(result["rows"]), 3)
+
+
+class Stage4Assembly(unittest.TestCase):
+    def test_held_think_rows_leave_training_and_land_in_validation(self):
+        from izumxai.distill import assemble_stage4
+
+        def item(prompt, assistant, verified=True):
+            return {"verified": verified, "messages": [
+                {"role": "system", "content": "s"},
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": assistant},
+            ]}
+
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            think = td / "think.jsonl"
+            plain = td / "plain.jsonl"
+            plain_val = td / "plain_val.jsonl"
+            think.write_text("".join(json.dumps(item(f"t{i}", "<think>\nx\n</think>\n4")) + "\n"
+                                     for i in range(4)), encoding="utf-8")
+            plain.write_text("".join(json.dumps(item(f"p{i}", "4")) + "\n" for i in range(3)),
+                             encoding="utf-8")
+            plain_val.write_text(json.dumps(item("p0", "4")) + "\n", encoding="utf-8")
+
+            argv = ["assemble", "--think", str(think), "--plain", str(plain),
+                    "--plain-val", str(plain_val), "--out", str(td / "out"),
+                    "--repeat-think", "2", "--val-think", "2"]
+            with patch("sys.argv", argv):
+                assemble_stage4.main()
+
+            train = [json.loads(l) for l in (td / "out/train.jsonl").read_text(encoding="utf-8").splitlines()]
+            val = [json.loads(l) for l in (td / "out/val.jsonl").read_text(encoding="utf-8").splitlines()]
+            train_prompts = [r["messages"][1]["content"] for r in train]
+            val_prompts = [r["messages"][1]["content"] for r in val]
+
+            self.assertEqual(len(val), 3)
+            self.assertEqual(sum("<think>" in r["messages"][2]["content"] for r in val), 2)
+            self.assertFalse(set(train_prompts) & set(val_prompts))
+            # Оставшиеся рассуждения повторяются дважды, обычные — по одному разу.
+            train_think = [p for p in train_prompts if p.startswith("t")]
+            self.assertEqual(len(train_think), 4)
+            self.assertEqual(sorted(set(train_think)), sorted(set(train_prompts) - {"p1", "p2"}))
+            self.assertEqual(sorted(train_prompts).count("p1"), 1)
+            self.assertEqual(sorted(train_prompts).count("p2"), 1)
 
 
 if __name__ == "__main__":
