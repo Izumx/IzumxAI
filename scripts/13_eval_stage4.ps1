@@ -1,5 +1,5 @@
-# Замер stage4: единый бенч, быстрый прогон HumanEval и полный прогон
-param([string]$Model = "izumxai:2b-v4", [int]$Rounds = 3)
+# Замер обновлённой izumxai:2b-think: единый бенч и HumanEval
+param([string]$Model = "izumxai:2b-think-next", [int]$Rounds = 3)
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
@@ -19,5 +19,5 @@ if ($LASTEXITCODE -ne 0) { throw "smoke solve failed" }
 
 # 3) полный HumanEval с самопроверкой
 & $py -u -m izumxai.eval.solve --model $Model --think --rounds $Rounds `
-    --num-predict 2048 --out "runs/solver/humaneval-stage4-r$Rounds.json"
+    --num-predict 2048 --out "runs/solver/humaneval-think-next-r$Rounds.json"
 if ($LASTEXITCODE -ne 0) { throw "full solve failed" }

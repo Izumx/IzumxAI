@@ -1,6 +1,6 @@
-# Stage 4: решени€ с проверкой крайних случаев -> QLoRA -> GGUF -> ollama (izumxai:2b-v4)
-param([int]$N = 300, [string]$Tag = "izumxai:2b-v4",
-      [string]$Adapter = "runs/izumxai-2b-plan-lora",
+# ѕрокачка izumxai:2b-think: новые данные -> QLoRA -> GGUF -> временный тег дл€ сравнени€
+param([int]$N = 300, [string]$Tag = "izumxai:2b-think-next",
+      [string]$Adapter = "runs/izumxai-2b-think-lora",
       [int]$Epochs = 2, [int]$MaxLen = 1024)
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -28,12 +28,13 @@ if ($LASTEXITCODE -ne 0) { throw "assemble_stage4 failed" }
     --lora-r 32 --lora-alpha 64 --vram-budget-gb 4.5 --eval-every 40
 if ($LASTEXITCODE -ne 0) { throw "train_lora failed" }
 
-# 4) merge -> GGUF f16 -> Q4_K_M
+# 4) merge -> GGUF f16 -> Q4_K_M, шаблон рассуждений берЄм у текущей izumxai:2b-think
 $name = ($Tag -split ":")[0]
 & $py -m izumxai.distill.merge_export --adapter "$Adapter/final" `
-    --base Qwen/Qwen3-1.7B --out "models/$name" --gguf --quant Q4_K_M
+    --base Qwen/Qwen3-1.7B --out "models/$name" --gguf --quant Q4_K_M `
+    --name $Tag --modelfile-source "models/izumxai-think/Modelfile"
 if ($LASTEXITCODE -ne 0) { throw "merge_export failed" }
 
-# 5) импорт в Ollama
+# 5) создаЄм временный тег; старый izumxai:2b-think не трогаем до замера
 & ollama create $Tag -f "models/$name/Modelfile"
 if ($LASTEXITCODE -ne 0) { throw "ollama create failed" }

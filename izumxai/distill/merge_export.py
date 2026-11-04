@@ -87,6 +87,27 @@ def to_gguf(model_dir: Path, gguf_dir: Path, quant: str | None) -> Path:
     return q
 
 
+def write_modelfile(out_dir: Path, gguf: Path, source: str = "", name: str = "izumxai:2b") -> Path:
+    """Пишет Modelfile. С --modelfile-source берёт готовый шаблон (например, think)
+    и заменяет в нём только строку FROM."""
+    modelfile = out_dir / "Modelfile"
+    if source:
+        text = Path(source).read_text(encoding="utf-8")
+        lines = text.splitlines()
+        for i, line in enumerate(lines):
+            if line.strip().upper().startswith("FROM "):
+                lines[i] = f'FROM "{gguf}"'
+                break
+        else:
+            lines.insert(0, f'FROM "{gguf}"')
+        modelfile.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    else:
+        modelfile.write_text(MODELFILE.format(gguf=gguf), encoding="utf-8")
+    print(f"Modelfile: {modelfile}")
+    print(f"\nдальше:\n  ollama create {name} -f \"{modelfile}\"\n  ollama run {name}")
+    return modelfile
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--adapter", default="runs/izumxai-2b-lora/final")
@@ -95,23 +116,19 @@ def main() -> None:
     ap.add_argument("--gguf", action="store_true")
     ap.add_argument("--quant", default="Q4_K_M", help="Q8_0 / Q4_K_M / ... (пусто = без квантования)")
     ap.add_argument("--name", default="izumxai:2b")
+    ap.add_argument("--modelfile-source", default="",
+                    help="взять TEMPLATE/PARAMETER из готового Modelfile (например, models/izumxai-think/Modelfile)")
     args = ap.parse_args()
 
     merged = merge(args.adapter, Path(args.out), args.base)
 
     if not args.gguf:
         # Ollama умеет импортировать safetensors напрямую (без конвертации)
-        modelfile = Path(args.out) / "Modelfile"
-        modelfile.write_text(MODELFILE.format(gguf=merged.resolve()), encoding="utf-8")
-        print(f"Modelfile (safetensors): {modelfile}")
-        print(f"\nдальше:\n  ollama create {args.name} -f \"{modelfile}\"\n  ollama run {args.name}")
+        write_modelfile(Path(args.out), merged.resolve(), args.modelfile_source, args.name)
         return
 
     gguf = to_gguf(merged, Path(args.out) / "gguf", args.quant or None)
-    modelfile = Path(args.out) / "Modelfile"
-    modelfile.write_text(MODELFILE.format(gguf=gguf), encoding="utf-8")
-    print(f"Modelfile: {modelfile}")
-    print(f"\nдальше:\n  ollama create {args.name} -f \"{modelfile}\"\n  ollama run {args.name}")
+    write_modelfile(Path(args.out), gguf, args.modelfile_source, args.name)
 
 
 if __name__ == "__main__":

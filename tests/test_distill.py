@@ -231,5 +231,40 @@ class Stage4Assembly(unittest.TestCase):
             self.assertEqual(sorted(train_prompts).count("p2"), 1)
 
 
+class ModelfileExport(unittest.TestCase):
+    def test_source_keeps_template_and_replaces_from(self):
+        from izumxai.distill import merge_export
+
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            source = td / "source.Modelfile"
+            source.write_text(
+                'FROM "old.gguf"\n\nTEMPLATE """{{ .Prompt }}"""\n\nPARAMETER stop "<|im_end|>"\n',
+                encoding="utf-8",
+            )
+            gguf = td / "new.gguf"
+
+            modelfile = merge_export.write_modelfile(td, gguf, str(source), "izumxai:test")
+            text = modelfile.read_text(encoding="utf-8")
+
+            self.assertIn(f'FROM "{gguf}"', text)
+            self.assertNotIn("old.gguf", text)
+            self.assertIn("TEMPLATE", text)
+            self.assertIn('PARAMETER stop "<|im_end|>"', text)
+
+    def test_without_source_uses_default_template(self):
+        from izumxai.distill import merge_export
+
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            gguf = td / "new.gguf"
+
+            modelfile = merge_export.write_modelfile(td, gguf, "", "izumxai:test")
+            text = modelfile.read_text(encoding="utf-8")
+
+            self.assertIn(f'FROM "{gguf}"', text)
+            self.assertIn("TEMPLATE", text)
+
+
 if __name__ == "__main__":
     unittest.main()
