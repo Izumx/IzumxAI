@@ -121,6 +121,9 @@ def solve(session, tokenizer, model, task, think, rounds, options):
     for attempt in range(rounds):
         prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True,
                                                enable_thinking=think)
+        if think:
+            # Open the reasoning ourselves, as Qwen3 Thinking-2507 templates do.
+            prompt += "<think>\n"
         opts = dict(options, seed=options["seed"] + attempt)
         data = generate(session, model, prompt, opts)
         tokens += data.get("eval_count", 0)
@@ -128,7 +131,7 @@ def solve(session, tokenizer, model, task, think, rounds, options):
         if think and "</think>" not in text:
             # Thinking budget exhausted: close the reasoning and ask for the code now.
             text = text.split("<think>")[-1].strip()
-            forced = (prompt + "<think>\n" + text +
+            forced = (prompt + text +
                       "\n\nI have thought enough, time to write the final solution.\n</think>\n\n")
             data = generate(session, model, forced, dict(opts, num_predict=1024))
             tokens += data.get("eval_count", 0)

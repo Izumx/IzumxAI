@@ -34,6 +34,12 @@ SYSTEM_RU = (
     "без LaTeX, без $$, без повторения условия. Последняя строка обязательно: «Ответ: <значение>»."
 )
 
+# Instruction tasks set their own output format; a trailing «Ответ:» line would break it.
+SYSTEM_INSTR = (
+    "Ты — IzumxAI, точный ассистент. Строго соблюдай формат ответа, который просит "
+    "пользователь, и не добавляй ничего сверх него."
+)
+
 SYSTEM_CODE = (
     "Ты пишешь только рабочий код Python в одном блоке ```python. "
     "Без лишних объяснений."
@@ -545,6 +551,12 @@ def _instr_int(expected: int) -> Callable[[str], bool]:
 
 
 def gen_instruction(rng: random.Random, level: str = "easy") -> Task:
+    task = _gen_instruction(rng, level)
+    task.system = SYSTEM_INSTR
+    return task
+
+
+def _gen_instruction(rng: random.Random, level: str = "easy") -> Task:
     """Задача на следование инструкции по заданному тексту."""
     text = make_text(rng)
     n_words = len(text.split())

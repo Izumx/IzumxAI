@@ -23,12 +23,13 @@ OLLAMA = "http://localhost:11434"
 
 
 def chat(model: str, system: str, user: str, temperature: float = 0.2,
-         num_ctx: int = 4096, num_predict: int = 800) -> tuple[str, float, int]:
+         num_ctx: int = 4096, num_predict: int = 800,
+         think: bool = False) -> tuple[str, float, int]:
     payload = {
         "model": model,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         "stream": False,
-        "think": False,
+        "think": think,
         "options": {"temperature": temperature, "num_ctx": num_ctx, "num_predict": num_predict},
     }
     t0 = time.time()
@@ -74,6 +75,8 @@ def main() -> None:
     ap.add_argument("--n-instr", type=int, default=12)
     ap.add_argument("--level", default="hard", choices=["easy", "hard", "mix"])
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--think", action="store_true", help="режим рассуждений (Qwen3)")
+    ap.add_argument("--num-predict", type=int, default=800)
     ap.add_argument("--out", default="runs/bench.json")
     args = ap.parse_args()
 
@@ -90,7 +93,8 @@ def main() -> None:
             ok_n = 0
             for i, (level, t) in enumerate(items, 1):
                 try:
-                    ans, dt, ntok = chat(model, t.system, t.problem)
+                    ans, dt, ntok = chat(model, t.system, t.problem, num_ctx=8192 if args.think else 4096,
+                                         num_predict=args.num_predict, think=args.think)
                 except Exception as e:
                     res["errors"] += 1
                     res["rows"].append({
