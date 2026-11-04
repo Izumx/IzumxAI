@@ -93,6 +93,11 @@ def main() -> None:
                     ans, dt, ntok = chat(model, t.system, t.problem)
                 except Exception as e:
                     res["errors"] += 1
+                    res["rows"].append({
+                        "kind": kind, "level": level, "problem": t.problem,
+                        "expected": t.expected, "answer": "", "ok": False,
+                        "error": str(e), "sec": 0, "tokens": 0,
+                    })
                     print(f"  {kind} {i}: ошибка {e}")
                     continue
                 ok = bool(t.check(ans))
@@ -109,7 +114,7 @@ def main() -> None:
             print(f"  -> {kind}: {acc:.0%}")
 
         good = [r for r in res["rows"] if r["tokens"] and r["sec"]]
-        res["acc"] = sum(r["ok"] for r in good) / max(1, len(good))
+        res["acc"] = sum(r["ok"] for r in res["rows"]) / max(1, total)
         res["tok_per_s"] = (sum(r["tokens"] for r in good)
                             / max(1e-9, sum(r["sec"] for r in good)))
         results[model] = res

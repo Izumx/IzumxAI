@@ -1,0 +1,109 @@
+diff --git a/smel/loss.py b/smel/loss.py
+index 5af1196..34e83f5 100644
+--- a/smel/loss.py
++++ b/smel/loss.py
+@@ -1,9 +1,13 @@
+ """Chunked cross-entropy over a frozen lm_head (bf16 or int8 rows) without materializing [T, 248k] logits.
+ 
++Modified by IzumxAI on 2026-11-03: validate public loss inputs and frozen heads.
++
+ The gradient w.r.t. the hidden states is computed in the same pass as the loss (lm_head is frozen) and returned by
+ backward, so peak memory is one [token_chunk, vocab_chunk] fp32 tile. Optional final-logit softcapping
+ (Gemma: logits = cap * tanh(z / cap)) is applied inside the same pass, gradient included.
+ """
++import math
++
+ import torch
+ 
+ from .quant import dequant_int8_rows, quantize_int8_rows
+@@ -12,7 +16,10 @@ from .quant import dequant_int8_rows, quantize_int8_rows
+ class LMHead:
+     def __init__(self, weight: torch.Tensor | None = None, int8: dict | None = None, vocab_chunk: int = 32768,
+                  softcap: float = 0.0):
+-        assert (weight is None) != (int8 is None)
++        if (weight is None) == (int8 is None):
++            raise ValueError("provide exactly one frozen weight or int8 head")
++        if not isinstance(vocab_chunk, int) or vocab_chunk <= 0:
++            raise ValueError("vocab_chunk must be a positive integer")
+         self.w, self.q = weight, int8
+         self.vocab = weight.shape[0] if weight is not None else int8["q"].shape[0]
+         self.vocab_chunk = vocab_chunk
+@@ -148,6 +155,21 @@ class _ChunkedCE(torch.autograd.Function):
+ 
+ def chunked_ce(h, head: LMHead, tgt, denom: float, token_chunk: int = 1024, need_grad: bool = True):
+     """sum_t CE(h_t @ W.T, tgt_t) / denom. h: [N, H] (final-normed, only supervised rows), tgt: [N] long."""
++    if not math.isfinite(float(denom)) or denom <= 0:
++        raise ValueError("denom must be finite and positive")
++    if not isinstance(token_chunk, int) or token_chunk <= 0:
++        raise ValueError("token_chunk must be a positive integer")
++    weight = head.w if head.w is not None else head.q["q"]
++    if h.ndim != 2 or weight.ndim != 2 or h.shape[1] != weight.shape[1]:
++        raise ValueError("hidden and head must be matrices with matching hidden size")
++    if tgt.dtype != torch.long or tgt.ndim != 1 or tgt.shape[0] != h.shape[0]:
++        raise ValueError("targets must be one int64 token ID per hidden row")
++    if tgt.device != h.device or weight.device != h.device:
++        raise ValueError("hidden, targets and head must share a device")
++    if tgt.numel() and bool(((tgt < 0) | (tgt >= head.vocab)).any()):
++        raise ValueError("targets must be valid vocabulary IDs; filter ignore_index rows first")
++    if need_grad and torch.is_grad_enabled() and head.w is not None and head.w.requires_grad:
++        raise ValueError("chunked_ce requires a frozen head; it returns hidden-state gradients only")
+     if h.shape[0] == 0:
+         return (h.sum() * 0.0)
+     if need_grad and h.requires_grad:
+diff --git a/tests/test_loss_validation.py b/tests/test_loss_validation.py
+new file mode 100644
+index 0000000..22c8f2b
+--- /dev/null
++++ b/tests/test_loss_validation.py
+@@ -0,0 +1,51 @@
++"""CPU regression tests added by IzumxAI, 2026-11-03."""
++import math
++import unittest
++
++import torch
++import torch.nn.functional as F
++
++from smel.loss import LMHead, chunked_ce
++
++
++class LossBoundary(unittest.TestCase):
++    def setUp(self):
++        self.h = torch.randn(2, 3, requires_grad=True)
++        self.head = LMHead(weight=torch.randn(5, 3), vocab_chunk=2)
++
++    def test_invalid_targets_fail_instead_of_silent_wrong_ce(self):
++        for values in ([0, -100], [0, 5]):
++            with self.subTest(values=values), self.assertRaises(ValueError):
++                chunked_ce(self.h, self.head, torch.tensor(values), 2)
++
++    def test_invalid_denominators_and_chunks_fail(self):
++        for denom in (0, -1, float('nan'), float('inf')):
++            with self.subTest(denom=denom), self.assertRaises(ValueError):
++                chunked_ce(self.h, self.head, torch.tensor([0, 1]), denom)
++        with self.assertRaises(ValueError):
++            chunked_ce(self.h, self.head, torch.tensor([0, 1]), 2, token_chunk=0)
++        with self.assertRaises(ValueError):
++            LMHead(weight=torch.randn(5, 3), vocab_chunk=0)
++
++    def test_trainable_head_cannot_silently_lose_its_gradient(self):
++        with self.assertRaisesRegex(ValueError, 'frozen'):
++            chunked_ce(self.h, LMHead(weight=torch.randn(5, 3, requires_grad=True)),
++                       torch.tensor([0, 1]), 2)
++
++    def test_loss_and_scaled_hidden_gradient_match_full_ce(self):
++        torch.manual_seed(11)
++        hidden = torch.randn(7, 4, requires_grad=True)
++        weight = torch.randn(13, 4)
++        target = torch.tensor([0, 12, 6, 1, 11, 4, 8])
++        expected = F.cross_entropy(hidden @ weight.T, target, reduction='sum') / 9
++        (expected * 1.7).backward()
++        expected_grad = hidden.grad.clone()
++        hidden.grad = None
++        actual = chunked_ce(hidden, LMHead(weight=weight, vocab_chunk=5), target, 9, token_chunk=3)
++        (actual * 1.7).backward()
++        torch.testing.assert_close(actual, expected)
++        torch.testing.assert_close(hidden.grad, expected_grad)
++
++
++if __name__ == '__main__':
++    unittest.main()

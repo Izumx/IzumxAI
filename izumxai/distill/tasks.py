@@ -27,6 +27,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from .code_tasks import ALGORITHM_TASKS
+
 SYSTEM_RU = (
     "Ты — IzumxAI, точный и краткий ассистент. Решай задачу в 2–3 коротких шага, "
     "без LaTeX, без $$, без повторения условия. Последняя строка обязательно: «Ответ: <значение>»."
@@ -466,6 +468,8 @@ CODE_TASKS: list[tuple[str, str, str, Callable, str]] = [
      lambda r: [("  a   b ", "a b"), ("", ""), ("a", "a")], "hard"),
 ]
 
+
+CODE_TASKS.extend(ALGORITHM_TASKS)
 
 # ================================================================ ИНСТРУКЦИИ
 _CITIES = ["Казань", "Тюмень", "Омск", "Сочи", "Пермь", "Уфа", "Самара"]

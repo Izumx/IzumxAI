@@ -1,0 +1,22 @@
+{
+  "source": "https://raw.githubusercontent.com/openai/human-eval/master/data/HumanEval.jsonl.gz",
+  "sha256_gzip": "b796127e635a67f93fb35c04f4cb03cf06f38c8072ee7cee8833d7bee06979ef",
+  "total_tasks": 164,
+  "selection": "random.Random(20261103).sample(items,12)",
+  "selected_ids": [
+    "HumanEval/22",
+    "HumanEval/36",
+    "HumanEval/41",
+    "HumanEval/49",
+    "HumanEval/158",
+    "HumanEval/157",
+    "HumanEval/34",
+    "HumanEval/13",
+    "HumanEval/135",
+    "HumanEval/65",
+    "HumanEval/130",
+    "HumanEval/29"
+  ],
+  "adaptation": "instruction wrapper asks for complete function; same original imports and original check(candidate) tests",
+  "scope": "12-task deterministic slice, not full HumanEval pass@1"
+}
