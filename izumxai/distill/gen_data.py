@@ -79,10 +79,17 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--think", action="store_true", help="включить reasoning учителя")
     ap.add_argument("--num-ctx", type=int, default=2048)
+    ap.add_argument("--chain-bias", type=float, default=None,
+                    help="доля длинных цепочек среди cyber-задач (по умолчанию 0.25/0.45)")
     ap.add_argument("--num-predict", type=int, default=512)
     ap.add_argument("--timeout", type=int, default=900)
     ap.add_argument("--max-attempts", type=int, default=0,
                     help="остановиться после N попыток (0 — без ограничения)")
+    ap.add_argument("--code-only", action="store_true",
+                    help="генерировать только «напиши функцию» (банк secure-code)")
+    ap.add_argument("--fallback-reference", action="store_true",
+                    help="если учитель не прошёл тесты, взять проверенное эталонное "
+                         "решение из банка (для secure-code задач)")
     args = ap.parse_args()
 
     out = Path(args.out)
@@ -118,7 +125,7 @@ def main() -> None:
     t0 = time.time()
     start_kept = kept
     attempts = 0
-    fail = {"dup": 0, "parse": 0, "wrong": 0, "http": 0}
+    fail = {"dup": 0, "parse": 0, "wrong": 0, "http": 0, "ref": 0}
 
     with out.open("a", encoding="utf-8") as f:
         while kept < args.n:
@@ -128,7 +135,12 @@ def main() -> None:
             kind = rng.choice(kinds)
             level = rng.choice(levels)
             attempts += 1
-            task = gen_task(rng, kind, level)
+            if args.code_only:
+                from .cyber_tasks import gen_cyber_code
+                task = gen_cyber_code(rng, level, notes_rng=rng)
+                kind = "cyber"
+            else:
+                task = gen_task(rng, kind, level, chain_bias=args.chain_bias)
 
             key = _key(task.problem)
             if key in seen:
@@ -148,8 +160,12 @@ def main() -> None:
                 continue
 
             if not task.check(answer):
-                fail["wrong"] += 1
-                continue
+                if args.fallback_reference and task.reference and task.check(task.reference):
+                    answer = task.reference
+                    fail["ref"] += 1
+                else:
+                    fail["wrong"] += 1
+                    continue
 
             seen.add(key)
             f.write(json.dumps(

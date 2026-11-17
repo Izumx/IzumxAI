@@ -48,6 +48,8 @@ def build_tasks(args, rng: random.Random):
         ("code", args.n_code),
         ("instruction", args.n_instr),
     ]
+    if args.n_cyber:
+        plan.append(("cyber", args.n_cyber))
     levels = ["easy", "hard"] if args.level == "mix" else [args.level]
     seen: set[str] = set()
     out = {}
@@ -73,10 +75,14 @@ def main() -> None:
     ap.add_argument("--n-logic", type=int, default=12)
     ap.add_argument("--n-code", type=int, default=16)
     ap.add_argument("--n-instr", type=int, default=12)
+    ap.add_argument("--n-cyber", type=int, default=0,
+                    help="задачи по кибербезу (запуск тестов, декодирование, аудит)")
     ap.add_argument("--level", default="hard", choices=["easy", "hard", "mix"])
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--think", action="store_true", help="режим рассуждений (Qwen3)")
     ap.add_argument("--num-predict", type=int, default=800)
+    ap.add_argument("--num-ctx", type=int, default=0,
+                    help="контекст Ollama (0 — 8192 при --think, иначе 4096)")
     ap.add_argument("--out", default="runs/bench.json")
     args = ap.parse_args()
 
@@ -93,7 +99,8 @@ def main() -> None:
             ok_n = 0
             for i, (level, t) in enumerate(items, 1):
                 try:
-                    ans, dt, ntok = chat(model, t.system, t.problem, num_ctx=8192 if args.think else 4096,
+                    ans, dt, ntok = chat(model, t.system, t.problem,
+                                         num_ctx=args.num_ctx or (8192 if args.think else 4096),
                                          num_predict=args.num_predict, think=args.think)
                 except Exception as e:
                     res["errors"] += 1

@@ -1,4 +1,4 @@
-"""Слияние LoRA + экспорт в GGUF/ollama.
+﻿"""Слияние LoRA + экспорт в GGUF/ollama.
 
 python -m izumxai.distill.merge_export --adapter runs/izumxai-2b-lora/final \
        --out models/izumxai-2b --gguf
@@ -30,6 +30,15 @@ PARAMETER num_ctx 8192
 """
 
 
+MODELFILE_MIN = """FROM "{gguf}"
+
+PARAMETER num_ctx 8192
+PARAMETER temperature 0.7
+PARAMETER repeat_penalty 1.05
+PARAMETER num_predict 1024
+"""
+
+
 def fetch_convert_script(dest: Path) -> Path:
     url = "https://raw.githubusercontent.com/ggml-org/llama.cpp/master/convert_hf_to_gguf.py"
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -41,7 +50,14 @@ def fetch_convert_script(dest: Path) -> Path:
 def merge(adapter: str, out_dir: Path, base: str) -> Path:
     import torch
     from peft import PeftModel
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoTokenizer
+
+    from .common import auto_model_class
+
+    # transformers rejects Windows relative paths ("runs\...\final") as repo ids,
+    # so any existing local directory must be handed over as an absolute path.
+    if Path(adapter).is_dir():
+        adapter = str(Path(adapter).resolve())
 
     meta_path = Path(adapter).parent / "train_meta.json"
     if meta_path.exists():
@@ -49,7 +65,8 @@ def merge(adapter: str, out_dir: Path, base: str) -> Path:
 
     print(f"база: {base}")
     tok = AutoTokenizer.from_pretrained(adapter)
-    model = AutoModelForCausalLM.from_pretrained(
+    loader = auto_model_class(base)
+    model = loader.from_pretrained(
         base, torch_dtype=torch.float16, device_map="cpu", low_cpu_mem_usage=True
     )
     model = PeftModel.from_pretrained(model, adapter)
@@ -61,13 +78,13 @@ def merge(adapter: str, out_dir: Path, base: str) -> Path:
     return out_dir
 
 
-def to_gguf(model_dir: Path, gguf_dir: Path, quant: str | None) -> Path:
+def to_gguf(model_dir: Path, gguf_dir: Path, quant: str | None, stem: str = "izumxai") -> Path:
     script = Path("tools/llama_src/convert_hf_to_gguf.py")
     if not script.exists():
         script = Path("tools/llama.cpp/convert_hf_to_gguf.py")
     if not script.exists():
         fetch_convert_script(script)
-    out = gguf_dir / "izumxai-2b-f16.gguf"
+    out = gguf_dir / f"{stem}-f16.gguf"
     out.parent.mkdir(parents=True, exist_ok=True)
     cmd = [sys.executable, str(script), str(model_dir), "--outfile", str(out), "--outtype", "f16"]
     print(" ".join(cmd))
@@ -82,24 +99,35 @@ def to_gguf(model_dir: Path, gguf_dir: Path, quant: str | None) -> Path:
               "(скачать: https://github.com/ggml-org/llama.cpp/releases, "
               "llama-bXXXXX-bin-win-cpu-x64.zip -> tools/llama_bin)")
         return out
-    q = gguf_dir / f"izumxai-2b-{quant}.gguf"
+    q = gguf_dir / f"{stem}-{quant}.gguf"
     subprocess.run([str(exe), str(out), str(q), quant], check=True)
     return q
 
 
-def write_modelfile(out_dir: Path, gguf: Path, source: str = "", name: str = "izumxai:2b") -> Path:
+def write_modelfile(out_dir: Path, gguf: Path, source: str = "", name: str = "izumxai:2b",
+                    minimal: bool = False) -> Path:
     """Пишет Modelfile. С --modelfile-source берёт готовый шаблон (например, think)
     и заменяет в нём только строку FROM."""
     modelfile = out_dir / "Modelfile"
+    # Ollama-сервер разворачивает относительный путь FROM от своего cwd, а не от
+    # каталога вызова, и тогда принимает путь за имя модели («invalid model
+    # name»). Поэтому в Modelfile всегда пишем абсолютный путь.
+    gguf_abs = Path(gguf).resolve()
+    if minimal:
+        # Шаблон чата остаётся из GGUF (нужно для qwen3_5 с thinking).
+        modelfile.write_text(MODELFILE_MIN.format(gguf=gguf_abs), encoding="utf-8")
+        print(f"Modelfile (шаблон из GGUF): {modelfile}")
+        print(f"\nдальше:\n  ollama create {name} -f \"{modelfile}\"\n  ollama run {name}")
+        return modelfile
     if source:
         text = Path(source).read_text(encoding="utf-8")
         lines = text.splitlines()
         for i, line in enumerate(lines):
             if line.strip().upper().startswith("FROM "):
-                lines[i] = f'FROM "{gguf}"'
+                lines[i] = f'FROM "{gguf_abs}"'
                 break
         else:
-            lines.insert(0, f'FROM "{gguf}"')
+            lines.insert(0, f'FROM "{gguf_abs}"')
         modelfile.write_text("\n".join(lines) + "\n", encoding="utf-8")
     else:
         modelfile.write_text(MODELFILE.format(gguf=gguf), encoding="utf-8")
@@ -118,17 +146,23 @@ def main() -> None:
     ap.add_argument("--name", default="izumxai:2b")
     ap.add_argument("--modelfile-source", default="",
                     help="взять TEMPLATE/PARAMETER из готового Modelfile (например, models/izumxai-think/Modelfile)")
+    ap.add_argument("--merged", action="store_true",
+                    help="адаптер уже слит: --base указывает на готовую папку модели")
+    ap.add_argument("--stem", default="", help="префикс имени GGUF (по умолчанию имя папки)")
+    ap.add_argument("--no-template", action="store_true",
+                    help="не переопределять TEMPLATE: взять шаблон чата из GGUF")
     args = ap.parse_args()
 
-    merged = merge(args.adapter, Path(args.out), args.base)
+    merged = (Path(args.base) if args.merged
+              else merge(args.adapter, Path(args.out), args.base))
 
-    if not args.gguf:
-        # Ollama умеет импортировать safetensors напрямую (без конвертации)
-        write_modelfile(Path(args.out), merged.resolve(), args.modelfile_source, args.name)
-        return
-
-    gguf = to_gguf(merged, Path(args.out) / "gguf", args.quant or None)
-    write_modelfile(Path(args.out), gguf, args.modelfile_source, args.name)
+    if args.gguf:
+        gguf = to_gguf(merged, Path(args.out) / "gguf", args.quant or None,
+                       args.stem or Path(args.out).name)
+    else:
+        gguf = merged.resolve()
+    write_modelfile(Path(args.out), gguf, args.modelfile_source, args.name,
+                    minimal=args.no_template)
 
 
 if __name__ == "__main__":

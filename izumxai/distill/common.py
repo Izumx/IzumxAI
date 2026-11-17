@@ -19,8 +19,14 @@ def response_loss(model, ids, labels, attention_mask):
     positions = (labels[:, 1:] != -100).any(dim=0).nonzero(as_tuple=True)[0]
     if not positions.numel():
         raise ValueError("response has no supervised next-token targets")
-    logits = model(input_ids=ids, attention_mask=attention_mask, use_cache=False,
-                   logits_to_keep=positions).logits
+    try:
+        logits = model(input_ids=ids, attention_mask=attention_mask, use_cache=False,
+                       logits_to_keep=positions).logits
+    except TypeError:
+        # Часть архитектур (например qwen3_5 multimodal) не принимает logits_to_keep.
+        full = model(input_ids=ids, attention_mask=attention_mask, use_cache=False).logits
+        logits = full.index_select(1, positions)
+        del full
     targets = labels[:, positions + 1]
     return torch.nn.functional.cross_entropy(
         logits.float().reshape(-1, logits.shape[-1]), targets.reshape(-1), ignore_index=-100)
@@ -68,30 +74,57 @@ def build_labeled_example(tokenizer, messages: list[dict], max_len: int):
     if not msgs or msgs[-1]["role"] != "assistant":
         return None
 
-    prompt_text = tokenizer.apply_chat_template(
-        msgs[:-1], tokenize=False, add_generation_prompt=True,
-        # Ответ с собственной цепочкой рассуждений не должен получать пустой
-        # <think></think> от шаблона: иначе модель учится «думать ни о чём».
-        enable_thinking=msgs[-1].get("content", "").lstrip().startswith("<think>"),
-    )
-    full_text = tokenizer.apply_chat_template(
-        msgs, tokenize=False,
-        enable_thinking=msgs[-1].get("content", "").lstrip().startswith("<think>"),
-    )
+    think_kwargs = {
+        "enable_thinking": msgs[-1].get("content", "").lstrip().startswith("<think>"),
+    }
+    try:
+        variants = [
+            {
+                "prompt": tokenizer.apply_chat_template(
+                    msgs[:-1], tokenize=False, add_generation_prompt=True, **think_kwargs
+                ),
+                "full": tokenizer.apply_chat_template(msgs, tokenize=False, **think_kwargs),
+            },
+            {  # часть внешних данных содержит CoT без <think>-тегов
+                "prompt": tokenizer.apply_chat_template(
+                    msgs[:-1],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    enable_thinking=not think_kwargs["enable_thinking"],
+                ),
+                "full": tokenizer.apply_chat_template(
+                    msgs,
+                    tokenize=False,
+                    enable_thinking=not think_kwargs["enable_thinking"],
+                ),
+            },
+        ]
+    except TypeError:
+        # Не все шаблоны (например qwen3_5) принимают enable_thinking.
+        variants = [
+            {
+                "prompt": tokenizer.apply_chat_template(
+                    msgs[:-1], tokenize=False, add_generation_prompt=True,
+                ),
+                "full": tokenizer.apply_chat_template(msgs, tokenize=False),
+            }
+        ]
 
-    prompt_ids = tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
-    full_ids = tokenizer(full_text, add_special_tokens=False)["input_ids"]
-    if not full_ids or len(full_ids) > max_len:
-        # A verified answer must remain complete and attached to its prompt.
-        return None
-    if full_ids[:len(prompt_ids)] != prompt_ids:
-        raise ValueError("chat template: prompt is not a prefix of the completed conversation")
-    cut = len(prompt_ids)
-    labels = [-100] * cut + full_ids[cut:]
-    if all(l == -100 for l in labels[1:]):
-        return None
+    for variant in variants:
+        prompt_ids = tokenizer(variant["prompt"], add_special_tokens=False)["input_ids"]
+        full_ids = tokenizer(variant["full"], add_special_tokens=False)["input_ids"]
+        if not full_ids or len(full_ids) > max_len:
+            # A verified answer must remain complete and attached to its prompt.
+            continue
+        if full_ids[: len(prompt_ids)] != prompt_ids:
+            continue
+        cut = len(prompt_ids)
+        labels = [-100] * cut + full_ids[cut:]
+        if all(l == -100 for l in labels[1:]):
+            continue
+        return {"input_ids": full_ids, "labels": labels}
 
-    return {"input_ids": full_ids, "labels": labels}
+    return None
 
 
 def load_tokenizer(name: str):
@@ -102,3 +135,15 @@ def load_tokenizer(name: str):
         tok.pad_token = tok.eos_token
     tok.padding_side = "right"
     return tok
+
+
+def auto_model_class(name_or_path: str):
+    """Выбирает класс загрузки: мультимодальные чекпоинты (qwen3_5) требуют
+    ImageTextToText, иначе PEFT-адаптер не совпадёт по именам слоёв."""
+    from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText
+
+    cfg = AutoConfig.from_pretrained(name_or_path)
+    archs = getattr(cfg, "architectures", None) or []
+    if any("ConditionalGeneration" in a for a in archs):
+        return AutoModelForImageTextToText
+    return AutoModelForCausalLM

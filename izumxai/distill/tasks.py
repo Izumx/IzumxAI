@@ -53,6 +53,7 @@ class Task:
     check: Callable[[str], bool]
     system: str = SYSTEM_RU
     expected: str | None = None  # эталон (для проверки банка и для ORPO)
+    reference: str | None = None  # готовое верное решение (код из банка)
 
 
 # --------------------------------------------------------------- числа/текст
@@ -535,7 +536,9 @@ def _instr_json(text: str) -> Callable[[str], bool]:
 def _instr_bullets(answer: str) -> bool:
     lines = [l.strip() for l in answer.splitlines() if l.strip()]
     bullets = [l for l in lines if re.match(r"^(\d[\).]|[-•*])\s+", l)]
-    return len(bullets) == 3 and len(lines) == 3 and all(len(l.split()) <= 14 for l in bullets)
+    # маркер списка («1.», «-») — не слово: считаем только текст пункта
+    bodies = [re.sub(r"^(\d[\).]|[-•*])\s+", "", l) for l in bullets]
+    return len(bullets) == 3 and len(lines) == 3 and all(len(b.split()) <= 14 for b in bodies)
 
 
 def _instr_short(answer: str) -> bool:
@@ -619,7 +622,8 @@ def gen_code(rng: random.Random, level: str = "easy") -> Task:
     return Task("code", desc, check, SYSTEM_CODE)
 
 
-def gen_task(rng: random.Random, kind: str, level: str = "easy") -> Task:
+def gen_task(rng: random.Random, kind: str, level: str = "easy",
+             chain_bias: float | None = None) -> Task:
     if kind == "math":
         return gen_math(rng, level)
     if kind == "logic":
@@ -628,6 +632,9 @@ def gen_task(rng: random.Random, kind: str, level: str = "easy") -> Task:
         return gen_code(rng, level)
     if kind == "instruction":
         return gen_instruction(rng, level)
+    if kind == "cyber":
+        from .cyber_tasks import gen_cyber
+        return gen_cyber(rng, level, chain_bias=chain_bias)
     raise ValueError(f"неизвестный тип задачи: {kind}")
 
 

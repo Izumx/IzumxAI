@@ -12,3 +12,4 @@ data/distill/
 *.pt
 *.gguf
 .ipynb_checkpoints/
+data/external/

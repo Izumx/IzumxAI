@@ -20,8 +20,8 @@ import torch
 from torch.utils.data import Dataset
 
 from .common import (
-    build_labeled_example, configure_vram_budget, load_tokenizer, pick_dtype, print_vram,
-    response_loss, cast_frozen_embeddings,
+    auto_model_class, build_labeled_example, configure_vram_budget, load_tokenizer, pick_dtype,
+    print_vram, response_loss, cast_frozen_embeddings,
 )
 
 
@@ -103,6 +103,12 @@ def main() -> None:
     ap.add_argument("--lora-r", type=int, default=16)
     ap.add_argument("--lora-alpha", type=int, default=32)
     ap.add_argument("--lora-dropout", type=float, default=0.05)
+    ap.add_argument("--arch", default="auto", choices=["auto", "text", "multimodal"],
+                    help="text = AutoModelForCausalLM, multimodal = ImageTextToText (qwen3_5)")
+    ap.add_argument("--vision-skip", default="visual,vision_tower,multi_modal_projector",
+                    help="части, которые не квантуются в 4-bit (vision-башня)")
+    ap.add_argument("--lora-targets", default="",
+                    help="список суффиксов модулей через запятую (по умолчанию авто)")
     ap.add_argument("--max-steps", type=int, default=-1)
     ap.add_argument("--save-every", type=int, default=200)
     ap.add_argument("--log-every", type=int, default=10)
@@ -126,10 +132,15 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
 
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+    from transformers import AutoConfig, BitsAndBytesConfig
 
     dtype = pick_dtype()
     tok = load_tokenizer(args.model)
+    cfg = AutoConfig.from_pretrained(args.model)
+    archs = getattr(cfg, "architectures", None) or []
+    multimodal = args.arch == "multimodal" or (
+        args.arch == "auto" and any("ConditionalGeneration" in a for a in archs))
+    skip = [s.strip() for s in args.vision_skip.split(",") if s.strip()]
 
     quant = None
     if not args.no_4bit:
@@ -138,15 +149,24 @@ def main() -> None:
             bnb_4bit_quant_type="nf4",
             bnb_4bit_use_double_quant=True,
             bnb_4bit_compute_dtype=dtype,
+            llm_int8_skip_modules=skip if multimodal else None,
         )
-    print(f"загружаю {args.model} ({'4-bit' if quant else 'bf16'})...")
-    model = AutoModelForCausalLM.from_pretrained(
+    loader = auto_model_class(args.model)
+    print(f"загружаю {args.model} ({'4-bit' if quant else 'bf16'}, {loader.__name__})...")
+    model = loader.from_pretrained(
         args.model,
         quantization_config=quant,
         torch_dtype=dtype,
         device_map={"": 0} if torch.cuda.is_available() else "cpu",
         attn_implementation="sdpa",
     )
+    frozen = 0
+    for name, p in model.named_parameters():
+        if any(s in name for s in skip):
+            p.requires_grad_(False)
+            frozen += p.numel()
+    if frozen:
+        print(f"заморожено vision-параметров: {frozen / 1e6:.1f}M")
     model.config.use_cache = False
     if quant is not None:
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
@@ -154,14 +174,27 @@ def main() -> None:
     model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     model.enable_input_require_grads()
 
+    if args.lora_targets:
+        targets = [t.strip() for t in args.lora_targets.split(",") if t.strip()]
+    elif multimodal:
+        # Гибридное внимание: q/k/v/o есть только в full-attention слоях,
+        # в linear-attention — in_proj_*/out_proj. Берём все линейные слои текста.
+        targets = sorted({name.rsplit(".", 1)[-1] for name, m in model.named_modules()
+                          if isinstance(m, torch.nn.Linear)
+                          and not any(s in name for s in skip)
+                          and "lm_head" not in name})
+    else:
+        targets = ["q_proj", "k_proj", "v_proj", "o_proj",
+                   "gate_proj", "up_proj", "down_proj"]
+    print(f"LoRA-цели ({len(targets)}): {', '.join(targets)}")
+
     peft_cfg = LoraConfig(
         r=args.lora_r,
         lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,
         bias="none",
         task_type="CAUSAL_LM",
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                        "gate_proj", "up_proj", "down_proj"],
+        target_modules=targets,
     )
     model = get_peft_model(model, peft_cfg)
     model.print_trainable_parameters()
