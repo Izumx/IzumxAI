@@ -28,6 +28,10 @@ $py = ".\.venv\Scripts\python.exe"
 $env:HF_HOME = "$root\.cache\hf"
 $env:PYTHONPATH = $root
 $env:OLLAMA_MODELS = "D:\ollama\models"
+# Harmless on Windows (expandable_segments is not implemented there) but keeps
+# the Linux path consistent; the real OOM fix is chunked_cross_entropy plus the
+# skip-on-OOM guard in train_lora.
+$env:PYTORCH_CUDA_ALLOC_CONF = "expandable_segments:True"
 
 function Assert-Ok([string]$step) {
     if ($LASTEXITCODE -ne 0) {
@@ -52,7 +56,7 @@ if (-not $SkipData) {
 if (-not $SkipTrain) {
     Write-Host "`n[2/7] QLoRA on $Student" -ForegroundColor Cyan
     & $py -u -m izumxai.distill.train_lora --model $Student --data $train --val $val `
-        --out $adapter --max-len 2048 --vram-budget-gb 15.0 `
+        --out $adapter --max-len 2048 --vram-budget-gb 14.5 `
         --lora-r 32 --lora-alpha 64 --epochs $Epochs --grad-accum 8 --lr 2e-4 `
         --eval-every 200 --save-every 500
     Assert-Ok "train_lora"

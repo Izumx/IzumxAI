@@ -265,9 +265,17 @@ def main() -> None:
         ids, labels, attn = collate(batch, tok.pad_token_id)
         ids, labels, attn = ids.cuda(), labels.cuda(), attn.cuda()
 
-        with torch.autocast("cuda", dtype=dtype, enabled=torch.cuda.is_available()):
-            loss = response_loss(model, ids, labels, attn)
-        (loss / args.grad_accum).backward()
+        try:
+            with torch.autocast("cuda", dtype=dtype, enabled=torch.cuda.is_available()):
+                loss = response_loss(model, ids, labels, attn)
+            (loss / args.grad_accum).backward()
+        except torch.OutOfMemoryError:
+            # A single unusually long sample can still exceed a fragmented
+            # allocator; drop it instead of losing the whole run.
+            opt.zero_grad(set_to_none=True)
+            torch.cuda.empty_cache()
+            print(f"  OOM на шаге {step} (len {ids.shape[1]}) — пример пропущен", flush=True)
+            continue
         loss_acc += loss.item()
         seen += int(attn.sum())
         micro += 1

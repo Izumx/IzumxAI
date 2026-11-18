@@ -10,6 +10,26 @@ DEFAULT_SYSTEM = (
 )
 
 
+def chunked_cross_entropy(logits, targets, chunk: int = 256):
+    """Cross-entropy over a long sequence without materializing fp32 logits at once.
+
+    A full 2048-token sample upcasts its vocabulary logits to ~1.9 GiB of fp32,
+    which does not fit the allocator once VRAM is fragmented. Slicing the
+    sequence keeps the transient at ~0.2 GiB and gives an identical value.
+    """
+    flat_logits = logits.reshape(-1, logits.shape[-1])
+    flat_targets = targets.reshape(-1)
+    total = torch.zeros((), device=flat_logits.device, dtype=torch.float32)
+    count = 0
+    for start in range(0, flat_targets.numel(), chunk):
+        part_logits = flat_logits[start:start + chunk].float()
+        part_targets = flat_targets[start:start + chunk]
+        total = total + torch.nn.functional.cross_entropy(
+            part_logits, part_targets, ignore_index=-100, reduction="sum")
+        count += int((part_targets != -100).sum())
+    return total / max(count, 1)
+
+
 def response_loss(model, ids, labels, attention_mask):
     """Project only positions with supervised next tokens (Qwen3 logits_to_keep).
 
@@ -28,8 +48,7 @@ def response_loss(model, ids, labels, attention_mask):
         logits = full.index_select(1, positions)
         del full
     targets = labels[:, positions + 1]
-    return torch.nn.functional.cross_entropy(
-        logits.float().reshape(-1, logits.shape[-1]), targets.reshape(-1), ignore_index=-100)
+    return chunked_cross_entropy(logits, targets)
 
 
 def cast_frozen_embeddings(model, dtype):
