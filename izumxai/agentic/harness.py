@@ -17,6 +17,7 @@ import os
 import queue
 import re
 import secrets
+import socket
 import subprocess
 import sys
 import threading
@@ -99,8 +100,18 @@ class Stand:
     output: str = ""
 
     def start(self) -> None:
+        # A stale service from an earlier run would answer requests with a
+        # different token: the oracle would report NOT SOLVED (never a false
+        # positive), but the probe would silently test the wrong process.
+        try:
+            with socket.create_connection(("127.0.0.1", self.port), timeout=0.5):
+                raise RuntimeError(f"port {self.port} already in use")
+        except OSError:
+            pass
+
         self.run_dir.mkdir(parents=True, exist_ok=True)
         (self.run_dir / "public").mkdir(exist_ok=True)
+        (self.run_dir / "public" / "files").mkdir(exist_ok=True)
         (self.run_dir / "public" / "hello.txt").write_text("hello\n", encoding="utf-8")
         (self.run_dir / "secret.txt").write_text(self.token + "\n", encoding="utf-8")
 
@@ -127,12 +138,14 @@ class Stand:
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
-                with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/", timeout=1):
+                # A plain TCP connect, not an HTTP request: GET / would execute
+                # the vulnerable function with an empty payload, and a slow
+                # command could make the readiness probe time out mid-response
+                # and kill the service on a broken pipe.
+                with socket.create_connection(("127.0.0.1", self.port), timeout=1):
                     return
-            except urllib.error.HTTPError:
-                return          # service answered, any status is fine
-            except Exception:   # noqa: BLE001
-                time.sleep(0.3)
+            except OSError:
+                time.sleep(0.2)
         raise RuntimeError(f"service on :{self.port} did not start")
 
     def drain(self) -> None:
@@ -149,6 +162,23 @@ class Stand:
     def stop(self) -> None:
         if self.proc and self.proc.poll() is None:
             self.proc.kill()
+        # Killing wsl.exe does not reliably kill the Linux process: it can keep
+        # the port and keep answering with its own token. Kill it by script path.
+        script = to_wsl(self.task_dir / self.entry)
+        try:
+            subprocess.run(
+                ["wsl", "-d", WSL_DISTRO, "-e", "pkill", "-f", script],
+                capture_output=True, timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            try:
+                with socket.create_connection(("127.0.0.1", self.port), timeout=0.3):
+                    time.sleep(0.1)
+            except OSError:
+                return
 
 
 class Tools:
@@ -480,6 +510,7 @@ def run_task(model: str, task_dir: Path, max_steps: int, root: Path,
     record = {
         "model": model,
         "task": task["slug"],
+        "class": task.get("class", ""),
         "solved": solved,
         "steps": steps,
         "escalated": escalated,
@@ -505,12 +536,15 @@ def main() -> int:
                     help="сколько кандидатов генерировать на шаг (best-of-k)")
     ap.add_argument("--repeat", type=int, default=1,
                     help="сколько проходов по всем задачам; каждый в своём подкаталоге")
+    ap.add_argument("--tasks-dir", default=str(TASKS),
+                    help="каталог с задачами; по умолчанию встроенные 4")
     args = ap.parse_args()
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     root = RUNS / stamp
-    task_dirs = [TASKS / t for t in args.task] if args.task else sorted(
-        p for p in TASKS.iterdir() if (p / "task.json").exists()
+    tasks_root = Path(args.tasks_dir)
+    task_dirs = [tasks_root / t for t in args.task] if args.task else sorted(
+        p for p in tasks_root.iterdir() if (p / "task.json").exists()
     )
     rows = []
     for model in args.model:

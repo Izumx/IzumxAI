@@ -64,15 +64,31 @@ def main() -> int:
         return f"{ok}/{len(recs)} ({pure})"
 
     print(f"run: {root}")
-    width = max(20, *(len(m) for m in models))
-    header = "model".ljust(width) + "".join(t[:16].rjust(18) for t in tasks)
-    print(header)
-    print("-" * len(header))
+    if len(tasks) <= 12:
+        width = max(20, *(len(m) for m in models))
+        header = "model".ljust(width) + "".join(t[:16].rjust(18) for t in tasks)
+        print(header)
+        print("-" * len(header))
+        for m in models:
+            line = m.ljust(width)
+            for t in tasks:
+                line += cell(per[(m, t)]).rjust(18)
+            print(line)
+    else:
+        print(f"{len(tasks)} tasks: per-task matrix skipped, see by class")
+
+    classes = sorted({r.get("class") or "?" for r in rows})
+    print("\nby class: solved (solved without escalation)")
     for m in models:
-        line = m.ljust(width)
-        for t in tasks:
-            line += cell(per[(m, t)]).rjust(18)
-        print(line)
+        print(f"  {m}")
+        for c in classes:
+            recs = [r for r in rows
+                    if r["model"] == m and (r.get("class") or "?") == c]
+            if not recs:
+                continue
+            ok = sum(r["solved"] for r in recs)
+            pure = sum(r["solved"] and not r["escalated"] for r in recs)
+            print(f"    {c:16} {ok:3}/{len(recs):<3} ({pure})")
 
     print("\ntotal solved (solved without escalation)")
     for m in models:

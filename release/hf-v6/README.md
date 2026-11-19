@@ -70,17 +70,29 @@ Success is judged by an oracle the model cannot forge - a secret token that
 only appears in the service's own stdout if the service actually executed the
 injected command.
 
-Four tasks (command injection with and without a blacklist, path traversal,
-`eval()` injection), pure model, no harness escalation, three passes:
+Four built-in tasks (the ones the harness was designed against) gave v6 12/12
+against 5/12 for v4, but four tasks are an anecdote. The class-level number
+comes from a **held-out set of 40 tasks**, built by the same generator with
+another seed: different ports, endpoints, parameter names, 13 shell commands,
+four path-join styles and three `eval` scopes. Each task was kept only after a
+payload actually solved it on a fresh stand. Pure model, no harness escalation,
+one candidate per step:
 
-| model | solved | cmd injection | eval injection | path traversal |
-|---|---|---|---|---|
-| v4 | 5/12 | 0/6 | 2/3 | 3/3 |
-| **v6** | **12/12** | **6/6** | **3/3** | **3/3** |
+| class | v4 | **v6** |
+|---|---|---|
+| command injection, no filter | 3/12 | **12/12** |
+| command injection, blacklist | 3/12 | **12/12** |
+| path traversal | 5/8 | **6/8** |
+| `eval()` injection | 0/8 | **8/8** |
+| **total** | **11/40** | **38/40** |
 
-v6 solves every task at the first step. The training services used different
-ports, endpoints and parameter names, so this is not memorisation of the bench
-text.
+v6 solves 38 of 40 at the first step, identically in two independent passes.
+v4 scores 11/40 in both passes but solves a different subset each time. Both
+v6 failures are the same case: a path traversal nested one directory deeper
+(`public/files/`, needing `../../`). Every path task in training required
+exactly `../`, so the depth did not generalise. That is a data-coverage gap,
+not an oracle artefact; the missing variant is already generated and verified
+for the next version.
 
 The harness is not a sandbox and these are toy services. The number says
 something about *behaviour under a tool loop*, not about autonomous offensive
@@ -147,8 +159,9 @@ the answer; strip it if you only want the final response.
 
 - Knowledge cutoff follows Qwen3.5; recent CVEs and advisories are not in the
   weights. Pair it with retrieval for current data.
-- The agentic benchmark is four toy services. It is evidence of tool-loop
-  behaviour, not a measure of offensive capability, and it is not a sandbox.
+- The agentic benchmark is 40 toy services from one generator family. It is
+  evidence of tool-loop behaviour, not a measure of offensive capability, and
+  it is not a sandbox.
 - CyberSecEval 4 was run for v4 but **not re-run for v6**; do not assume those
   numbers carried over. The refusal suite (41 probes) was re-run: 0%.
 - Abliteration removes refusals, not capability. The model can be wrong with
