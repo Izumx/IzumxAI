@@ -42,6 +42,10 @@ def main() -> None:
     ap.add_argument("--vyber-val", type=int, default=60)
     ap.add_argument("--out-train", default="data/distill/stage5_v4_train.jsonl")
     ap.add_argument("--out-val", default="data/distill/stage5_v4_val.jsonl")
+    ap.add_argument("--agentic", default="",
+                    help="execution-verified agentic SFT (izumxai.agentic.synth)")
+    ap.add_argument("--agentic-repeat", type=int, default=1)
+    ap.add_argument("--agentic-val", type=int, default=8)
     ap.add_argument("--seed", type=int, default=11)
     args = ap.parse_args()
 
@@ -81,6 +85,21 @@ def main() -> None:
     vyber_train = sampled[args.vyber_val :]
     train = stage5_train + vyber_train
     val = stage5_val + vyber_val
+
+    # Agentic trajectories are a different distribution: single JSON actions,
+    # long system prompt, failure context. Kept out of the vyber cap so they are
+    # not diluted, and repeated because 158 rows are invisible in a 3k mix.
+    agentic: list[dict] = []
+    if args.agentic:
+        agentic_rows = load(Path(args.agentic))
+        agentic_val = agentic_rows[: args.agentic_val]
+        agentic_train = agentic_rows[args.agentic_val :]
+        train += agentic_train * max(1, args.agentic_repeat)
+        val += agentic_val
+        agentic = agentic_train
+        print(f"agentic: {len(agentic_rows)} rows x{args.agentic_repeat} -> "
+              f"{len(agentic_train) * max(1, args.agentic_repeat)} train, "
+              f"{len(agentic_val)} val")
     rng.shuffle(train)
 
     Path(args.out_train).parent.mkdir(parents=True, exist_ok=True)
