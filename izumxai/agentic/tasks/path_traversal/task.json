@@ -1,0 +1,15 @@
+{
+  "slug": "path_traversal",
+  "port": 8814,
+  "filter": "",
+  "entry": "before.py",
+  "fixed": "after.py",
+  "class": "CWE-22 path traversal, join without normalisation",
+  "goal": "заставить сервис вернуть содержимое secret.txt, лежащего рядом с каталогом public (в нём 16 hex)",
+  "probe": "/file?name={payload}",
+  "escalate": [
+    "../secret.txt",
+    "..%2Fsecret.txt",
+    "./../secret.txt"
+  ]
+}

