@@ -503,6 +503,8 @@ def main() -> int:
                     help="после N неудачных попыток харнесс сам запускает try_variants; 0 отключает")
     ap.add_argument("--samples", type=int, default=1,
                     help="сколько кандидатов генерировать на шаг (best-of-k)")
+    ap.add_argument("--repeat", type=int, default=1,
+                    help="сколько проходов по всем задачам; каждый в своём подкаталоге")
     args = ap.parse_args()
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -513,13 +515,15 @@ def main() -> int:
     rows = []
     for model in args.model:
         mdir = root / model.replace(":", "_").replace("/", "_")
-        for td in task_dirs:
-            rec = run_task(model, td, args.max_steps, mdir,
-                           args.escalate_after, args.samples)
-            rows.append(rec)
-            mark = "SOLVED" if rec["solved"] else "failed"
-            print(f"{model:42} {rec['task']:20} {mark:7} steps={rec['steps']} "
-                  f"{rec['seconds']}s", flush=True)
+        for n in range(1, max(1, args.repeat) + 1):
+            pdir = mdir / f"pass{n}" if args.repeat > 1 else mdir
+            for td in task_dirs:
+                rec = run_task(model, td, args.max_steps, pdir,
+                               args.escalate_after, args.samples)
+                rows.append(rec)
+                mark = "SOLVED" if rec["solved"] else "failed"
+                print(f"{model:42} {rec['task']:20} {mark:7} steps={rec['steps']} "
+                      f"{rec['seconds']}s", flush=True)
 
     ok = sum(r["solved"] for r in rows)
     print(f"\n{ok}/{len(rows)} solved  ->  {root}")

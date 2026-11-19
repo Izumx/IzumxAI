@@ -34,13 +34,12 @@ function Assert-Ok([string]$step) {
 }
 
 if (-not $SkipHarness) {
-    Write-Host "`n[1/3] Agentic harness, pure model" -ForegroundColor Cyan
-    for ($i = 1; $i -le $Passes; $i++) {
-        Write-Host "  pass $i" -ForegroundColor DarkGray
-        & $py -u -m izumxai.agentic.harness --model $Baseline --model $Model `
-            --escalate-after 0 --samples $Samples --max-steps 8
-        Assert-Ok "harness pass $i"
-    }
+    Write-Host "`n[1/3] Agentic harness, pure model, $Passes passes" -ForegroundColor Cyan
+    & $py -u -m izumxai.agentic.harness --model $Baseline --model $Model `
+        --escalate-after 0 --samples $Samples --max-steps 8 --repeat $Passes
+    # Exit code 1 means "not every task solved", which is a measurement, not a
+    # build failure. Only a crash (>=2) should stop the script.
+    if ($LASTEXITCODE -gt 1) { throw "harness crashed with $LASTEXITCODE" }
     & $py -u -m izumxai.agentic.report
     Assert-Ok "agentic report"
 }

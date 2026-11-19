@@ -30,7 +30,7 @@ def latest(root: Path) -> Path:
 
 def load(root: Path) -> list[dict]:
     rows = []
-    for path in sorted(root.glob("*/*.json")):
+    for path in sorted(root.glob("**/*.json")):
         try:
             rows.append(json.loads(path.read_text(encoding="utf-8")))
         except (json.JSONDecodeError, OSError) as exc:

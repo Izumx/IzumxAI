@@ -77,12 +77,19 @@
 | `izumxai:9b-v4` | 8/8 | 3/8 |
 | `qwen35:9b-base` | 8/8 | 4/8 |
 | `izumxai:9b-v51s16` | 8/8 | 4/8 |
+| `izumxai:9b-v6` | 8/8 | **8/8** |
+
+v6 обучен на синтетике из `synth.py`. На трёх проходах без эскалации:
+v6 12/12, v4 5/12; на `cmd_inject_filter` и `cmd_inject_plain` у v4 0/6,
+у v6 6/6. Задачи харнесса в обучение не входили (в synth другие эндпоинты,
+порты и имена параметров).
 
 С классами: `cmd_inject_plain`, `cmd_inject_filter`, `path_traversal`,
 `eval_injection`. Перебор кандидатов живёт в коде — см. «Политика, а не
 рассуждение» ниже.
 
-Подробный разбор итераций — `docs/experiments/2026-11-18-v4-agentic-harness.md`.
+Подробный разбор итераций — `docs/experiments/2026-11-18-v4-agentic-harness.md`,
+обучение v6 — `docs/experiments/2026-11-19-v6-agentic-sft.md`.
 
 ## Где исполняется
 
