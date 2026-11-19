@@ -45,7 +45,9 @@ def main() -> None:
     ap.add_argument("--agentic", default="",
                     help="execution-verified agentic SFT (izumxai.agentic.synth)")
     ap.add_argument("--agentic-repeat", type=int, default=1)
-    ap.add_argument("--agentic-val", type=int, default=8)
+    ap.add_argument("--agentic-val", type=int, default=0,
+                    help="agentic rows in val; keep 0: one prompt can have several "
+                         "valid actions, which trips the train/val overlap guard")
     ap.add_argument("--seed", type=int, default=11)
     args = ap.parse_args()
 

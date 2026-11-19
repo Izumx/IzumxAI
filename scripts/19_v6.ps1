@@ -48,7 +48,7 @@ if (-not $SkipData) {
     Write-Host "`n[1/6] Mix stage5 + Vyber07 + verified agentic SFT" -ForegroundColor Cyan
     & $py -u -m izumxai.distill.mix_v4 --vyber-cap $VyberCap `
         --agentic data\distill\agentic_sft.jsonl --agentic-repeat $AgenticRepeat `
-        --out-train $train --out-val $val
+        --agentic-val 0 --out-train $train --out-val $val
     Assert-Ok "mix_v4"
 }
 
