@@ -363,10 +363,6 @@ def write_variant(v: Variant, root: Path) -> Path:
     return d
 
 
-def width(s: str) -> int:
-    return sum(2 if ord(c) > 0x2000 else 1 for c in s)
-
-
 @dataclass
 class Probe:
     payload: str
@@ -478,8 +474,8 @@ def build(out: Path, root: Path, seed: int, limit: int | None) -> None:
 
         # 3. search tools: the measured gap "never calls the search"
         if len(bad) >= 2:
-            solved, obs = probe_tool(task, task_dir, stand_dir, "try_variants",
-                                     {"cmd": "printenv IZUMX_TOKEN"})
+            solved, _obs = probe_tool(task, task_dir, stand_dir, "try_variants",
+                                      {"cmd": "printenv IZUMX_TOKEN"})
             if solved:
                 # Several contexts, because the decision to stop guessing and
                 # search has to win against a strong "try one more payload" prior.
@@ -492,8 +488,8 @@ def build(out: Path, root: Path, seed: int, limit: int | None) -> None:
                         {"tool": "try_variants",
                          "args": {"cmd": "printenv IZUMX_TOKEN"}},
                         v, "try_variants solved on a fresh stand"))
-            alive, rep = probe_tool(task, task_dir, stand_dir,
-                                    "surviving_separators", {})
+            _alive, _rep = probe_tool(task, task_dir, stand_dir,
+                                      "surviving_separators", {})
             # surviving_separators is a report, not a solve: verified indirectly,
             # by requiring that a separator it reports alive is inside a payload
             # that the oracle already accepted.
